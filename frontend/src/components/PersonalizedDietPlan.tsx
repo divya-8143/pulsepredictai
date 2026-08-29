@@ -1,7 +1,8 @@
 "use client";
 
 import React, { useState } from "react";
-import { Utensils, Apple, Heart, Flame, ShieldCheck, CheckCircle2, XCircle, Info, ChevronRight, Droplet } from "lucide-react";
+import { Utensils, Apple, Heart, Flame, ShieldCheck, CheckCircle2, XCircle, Info, ChevronRight, Droplet, Download, Loader2 } from "lucide-react";
+import { apiClient } from "@/lib/api";
 
 interface DietPlanProps {
   plan?: {
@@ -25,12 +26,41 @@ interface DietPlanProps {
     foods_to_restrict: string[];
     lifestyle_habits: string[];
   };
+  assessmentId?: string;
 }
 
-export default function PersonalizedDietPlan({ plan }: DietPlanProps) {
+export default function PersonalizedDietPlan({ plan, assessmentId }: DietPlanProps) {
   const [activeTab, setActiveTab] = useState<"meals" | "macros" | "foods" | "lifestyle">("meals");
+  const [downloadingPdf, setDownloadingPdf] = useState(false);
 
   if (!plan) return null;
+
+  const handleDownloadDietPdf = async () => {
+    if (!assessmentId) {
+      alert("Assessment ID unavailable for diet PDF download.");
+      return;
+    }
+    setDownloadingPdf(true);
+    try {
+      const response = await apiClient.get(`/assessments/${assessmentId}/diet-plan/pdf`, {
+        responseType: "blob"
+      });
+      const blob = new Blob([response.data], { type: "application/pdf" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", `PulsePredict_Diet_Plan_${assessmentId.slice(0, 8)}.pdf`);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error("Failed to download diet plan PDF", err);
+      alert("Failed to download diet plan PDF.");
+    } finally {
+      setDownloadingPdf(false);
+    }
+  };
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden space-y-6">
@@ -43,10 +73,24 @@ export default function PersonalizedDietPlan({ plan }: DietPlanProps) {
           <h2 className="text-xl font-bold mt-2">{plan.primary_dietary_framework}</h2>
           <p className="text-emerald-100 text-xs mt-1">{plan.weight_goal}</p>
         </div>
-        <div className="bg-white/10 backdrop-blur-md p-4 rounded-xl border border-white/20 text-center min-w-[140px]">
-          <span className="text-[10px] uppercase font-bold text-emerald-100 block">Daily Target</span>
-          <span className="text-2xl font-black text-white">{plan.daily_target_calories}</span>
-          <span className="text-[10px] text-emerald-200 block">kcal / day</span>
+        
+        <div className="flex items-center gap-3">
+          <div className="bg-white/10 backdrop-blur-md p-4 rounded-xl border border-white/20 text-center min-w-[130px]">
+            <span className="text-[10px] uppercase font-bold text-emerald-100 block">Daily Target</span>
+            <span className="text-2xl font-black text-white">{plan.daily_target_calories}</span>
+            <span className="text-[10px] text-emerald-200 block">kcal / day</span>
+          </div>
+
+          {assessmentId && (
+            <button
+              onClick={handleDownloadDietPdf}
+              disabled={downloadingPdf}
+              className="px-4 py-3 bg-white text-emerald-800 hover:bg-emerald-50 rounded-xl text-xs font-bold shadow-md flex items-center gap-2 transition disabled:opacity-50"
+            >
+              {downloadingPdf ? <Loader2 className="w-4 h-4 animate-spin text-emerald-600" /> : <Download className="w-4 h-4 text-emerald-600" />}
+              Download Diet PDF
+            </button>
+          )}
         </div>
       </div>
 

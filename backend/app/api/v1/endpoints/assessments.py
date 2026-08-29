@@ -17,6 +17,7 @@ from app.schemas.assessment import (
 )
 from app.services.assessment_service import AssessmentService
 from app.services.dietary_engine import PersonalizedDietaryEngine
+from app.services.diet_pdf_service import DietPlanPDFService
 from app.services.pdf_service import ClinicalPDFReportService
 from app.core.exceptions import EntityNotFoundException, ForbiddenException
 
@@ -73,7 +74,7 @@ async def download_patient_assessment_report(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Download official clinical PDF assessment report for patient or physician."""
+    """Download official clinical PDF assessment report."""
     stmt = (
         select(HealthAssessment)
         .where(HealthAssessment.id == assessment_id)
@@ -108,7 +109,7 @@ async def get_assessment_diet_plan(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Retrieve customized cardiorespiratory & metabolic balanced diet plan for an assessment."""
+    """Retrieve customized cardiorespiratory & metabolic balanced diet plan JSON."""
     stmt = (
         select(HealthAssessment)
         .where(HealthAssessment.id == assessment_id)
@@ -140,3 +141,57 @@ async def get_assessment_diet_plan(
         biomarkers, str(assessment.risk_category.value if hasattr(assessment.risk_category, "value") else assessment.risk_category)
     )
     return diet_plan
+
+@router.get("/{assessment_id}/diet-plan/pdf")
+async def download_assessment_diet_plan_pdf(
+    assessment_id: uuid.UUID,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Download customized cardiorespiratory & metabolic balanced diet plan as official PDF."""
+    stmt = (
+        select(HealthAssessment)
+        .where(HealthAssessment.id == assessment_id)
+        .options(
+            selectinload(HealthAssessment.patient).selectinload(PatientProfile.user)
+        )
+    )
+    res = await db.execute(stmt)
+    assessment = res.scalars().first()
+    if not assessment:
+        raise EntityNotFoundException("HealthAssessment", assessment_id)
+
+    if current_user.role == UserRole.PATIENT and assessment.patient.user_id != current_user.id:
+        raise ForbiddenException("Cannot access another patient's diet plan.")
+
+    patient_name = assessment.patient.user.full_name if (assessment.patient and assessment.patient.user) else "Patient"
+    biomarkers = {
+        "age": assessment.age,
+        "gender": assessment.patient.gender if assessment.patient else "MALE",
+        "bmi": assessment.bmi,
+        "systolic_bp": assessment.systolic_bp,
+        "diastolic_bp": assessment.diastolic_bp,
+        "fasting_glucose": assessment.fasting_glucose,
+        "hba1c": assessment.hba1c,
+        "total_cholesterol": assessment.total_cholesterol,
+        "ldl_cholesterol": assessment.ldl_cholesterol,
+        "triglycerides": assessment.triglycerides,
+        "physical_activity_hours_week": assessment.physical_activity_hours_week
+    }
+
+    diet_plan = PersonalizedDietaryEngine.generate_diet_plan(
+        biomarkers, str(assessment.risk_category.value if hasattr(assessment.risk_category, "value") else assessment.risk_category)
+    )
+
+    pdf_buffer = DietPlanPDFService.generate_diet_pdf(
+        diet_plan=diet_plan,
+        patient_name=patient_name,
+        assessment_id=str(assessment_id)
+    )
+
+    filename = f"PulsePredict_Diet_Plan_{str(assessment_id)[:8]}.pdf"
+    return Response(
+        content=pdf_buffer.getvalue(),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )

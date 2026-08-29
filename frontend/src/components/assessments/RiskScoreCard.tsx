@@ -207,7 +207,7 @@ export const RiskScoreCard: React.FC<RiskScoreCardProps> = ({
               Generating personalized balanced diet blueprint...
             </div>
           ) : (
-            <PersonalizedDietPlan plan={dietPlanData} />
+            <PersonalizedDietPlan plan={dietPlanData} assessmentId={assessmentId} />
           )}
         </div>
       )}
