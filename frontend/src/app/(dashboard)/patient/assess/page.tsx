@@ -6,6 +6,8 @@ import { DisclaimerBanner } from "@/components/shared/DisclaimerBanner";
 import { HealthDataForm } from "@/components/assessments/HealthDataForm";
 import { RiskScoreCard } from "@/components/assessments/RiskScoreCard";
 import { SHAPBreakdown } from "@/components/assessments/SHAPBreakdown";
+import UncertaintyBadge from "@/components/UncertaintyBadge";
+import BiomarkerAnomalyAlert from "@/components/BiomarkerAnomalyAlert";
 import { RiskAssessment } from "@/types";
 import Link from "next/link";
 import { ArrowLeft, RotateCcw } from "lucide-react";
@@ -40,7 +42,7 @@ export default function AssessPage() {
             <div>
               <h1 className="text-2xl font-bold text-slate-900">Multi-Model AI Health Assessment</h1>
               <p className="text-xs text-slate-500 mt-1">
-                Enter your physiological biomarkers below for real-time risk stratification.
+                Enter your physiological biomarkers below for real-time risk stratification and personalized diet planning.
               </p>
             </div>
             <HealthDataForm onSuccess={(res) => setResult(res)} />
@@ -50,15 +52,26 @@ export default function AssessPage() {
             <div>
               <h1 className="text-2xl font-bold text-slate-900">Your Health Risk Assessment Result</h1>
               <p className="text-xs text-slate-500 mt-1">
-                Generated via Logistic Regression, Random Forest & XGBoost with SHAP attribution.
+                Generated via Logistic Regression, Random Forest & XGBoost with SHAP attribution and cardioprotective nutrition planning.
               </p>
             </div>
+
+            {/* Physiological Anomaly Alert if any */}
+            <BiomarkerAnomalyAlert coherenceReport={(result as any).physiological_coherence} />
 
             <RiskScoreCard
               score={result.overall_risk_score}
               category={result.risk_category}
               primaryModel={result.primary_model_name}
               recommendations={result.clinical_recommendations}
+              assessmentId={result.id}
+            />
+
+            {/* Bayesian Confidence & Uncertainty */}
+            <UncertaintyBadge
+              confidenceInterval={(result as any).uncertainty_profile?.confidence_interval_95}
+              confidenceGrade={(result as any).uncertainty_profile?.confidence_grade}
+              isOOD={(result as any).uncertainty_profile?.is_out_of_distribution}
             />
 
             <SHAPBreakdown contributions={result.feature_importance_shap} />
