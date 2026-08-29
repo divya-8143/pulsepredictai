@@ -175,7 +175,7 @@ export default function HistoryPage() {
                                 Loading personalized diet plan...
                               </div>
                             ) : (
-                              <PersonalizedDietPlan plan={dietPlanData} />
+                              <PersonalizedDietPlan plan={dietPlanData} assessmentId={selectedDietId || undefined} />
                             )}
                           </td>
                         </tr>
