@@ -1,0 +1,127 @@
+version: '3.8'
+
+services:
+  # ==========================================
+  # PostgreSQL 16 Enterprise Database
+  # ==========================================
+  postgres:
+    image: postgres:16-alpine
+    container_name: pulsepredict-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pulseadmin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-pulseadmin_secure_pw_2026}
+      POSTGRES_DB: ${POSTGRES_DB:-pulsepredict_db}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pulseadmin} -d ${POSTGRES_DB:-pulsepredict_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pulsepredict-net
+
+  # ==========================================
+  # Redis 7.2 Cache & Task Broker
+  # ==========================================
+  redis:
+    image: redis:7.2-alpine
+    container_name: pulsepredict-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pulsepredict-net
+
+  # ==========================================
+  # FastAPI Backend Service
+  # ==========================================
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pulsepredict-backend
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-pulseadmin}:${POSTGRES_PASSWORD:-pulseadmin_secure_pw_2026}@postgres:5432/${POSTGRES_DB:-pulsepredict_db}
+      - SYNC_DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-pulseadmin}:${POSTGRES_PASSWORD:-pulseadmin_secure_pw_2026}@postgres:5432/${POSTGRES_DB:-pulsepredict_db}
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+      - MODEL_REGISTRY_PATH=/app/ml_engine/saved_models
+    volumes:
+      - ./backend:/app
+      - ./ml_engine:/app/ml_engine
+      - ./storage:/app/storage
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - pulsepredict-net
+
+  # ==========================================
+  # Celery Asynchronous Task Worker
+  # ==========================================
+  celery_worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pulsepredict-celery
+    restart: unless-stopped
+    command: celery -A app.tasks.celery_app.celery_app worker --loglevel=info -c 4
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://${POSTGRES_USER:-pulseadmin}:${POSTGRES_PASSWORD:-pulseadmin_secure_pw_2026}@postgres:5432/${POSTGRES_DB:-pulsepredict_db}
+      - SYNC_DATABASE_URL=postgresql+psycopg2://${POSTGRES_USER:-pulseadmin}:${POSTGRES_PASSWORD:-pulseadmin_secure_pw_2026}@postgres:5432/${POSTGRES_DB:-pulsepredict_db}
+      - CELERY_BROKER_URL=redis://redis:6379/1
+      - CELERY_RESULT_BACKEND=redis://redis:6379/2
+    volumes:
+      - ./backend:/app
+      - ./ml_engine:/app/ml_engine
+      - ./storage:/app/storage
+    depends_on:
+      - backend
+      - redis
+    networks:
+      - pulsepredict-net
+
+  # ==========================================
+  # Next.js Frontend Application
+  # ==========================================
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: pulsepredict-frontend
+    restart: unless-stopped
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    networks:
+      - pulsepredict-net
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  pulsepredict-net:
+    driver: bridge

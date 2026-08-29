@@ -1,0 +1,55 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environments & Virtual Envs
+.env
+.env.local
+.env.*.local
+venv/
+.venv/
+env/
+ENV/
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.log
+
+# Machine Learning Datasets & Artifacts
+ml_engine/datasets/raw/*.csv
+ml_engine/datasets/processed/*.parquet
+ml_engine/saved_models/*.joblib.bak
+ml_engine/saved_models/*.onnx.bak
+!ml_engine/saved_models/.gitkeep
+
+# Next.js / Node.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.turbo
+frontend/coverage/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Database & Cache data directories
+postgres_data/
+redis_data/
+storage/reports/*.pdf
+!storage/reports/.gitkeep
+storage/uploads/
+
+# IDEs & OS
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
