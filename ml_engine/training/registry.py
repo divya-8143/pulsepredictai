@@ -1,6 +1,6 @@
 import os
 import glob
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from ml_engine.config import SAVED_MODELS_DIR
 from ml_engine.models.base_model import BaseHealthRiskModel
 from ml_engine.models.logistic_regression import LogisticRegressionRiskModel

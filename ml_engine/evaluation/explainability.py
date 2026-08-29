@@ -14,28 +14,31 @@ class ExplainabilityEngine:
         Compute feature attribution breakdown for an individual patient assessment.
         """
         classifier = model.pipeline.named_steps["classifier"]
-        preprocessor = model.pipeline.named_steps["preprocessor"]
-        
-        # Transform features
-        fe_step = model.pipeline.named_steps.get("feature_engineering")
-        if fe_step:
-            X_trans_raw = fe_step.transform(X_sample)
+        full_preprocessor = model.pipeline.named_steps["preprocessor"]
+
+        # If full_preprocessor is a Pipeline, unpack ColumnTransformer
+        if hasattr(full_preprocessor, "named_steps"):
+            col_transformer = full_preprocessor.named_steps.get("preprocessor", full_preprocessor)
         else:
-            X_trans_raw = X_sample
-            
-        X_proc = preprocessor.transform(X_trans_raw)
-        
+            col_transformer = full_preprocessor
+
+        # Transform features
+        X_proc = full_preprocessor.transform(X_sample)
+
         # Get feature names from column transformer
         feature_names = []
-        for name, trans, cols in preprocessor.transformers_:
-            if name != "remainder":
-                if hasattr(trans, "get_feature_names_out"):
-                    try:
-                        feature_names.extend(trans.get_feature_names_out(cols))
-                    except Exception:
+        if hasattr(col_transformer, "transformers_"):
+            for name, trans, cols in col_transformer.transformers_:
+                if name != "remainder":
+                    if hasattr(trans, "get_feature_names_out"):
+                        try:
+                            feature_names.extend(trans.get_feature_names_out(cols))
+                        except Exception:
+                            feature_names.extend(cols)
+                    else:
                         feature_names.extend(cols)
-                else:
-                    feature_names.extend(cols)
+        else:
+            feature_names = list(X_sample.columns)
 
         # Tree explainer for XGBoost/RandomForest or Linear for LR
         try:
@@ -56,16 +59,13 @@ class ExplainabilityEngine:
             else:
                 vals = np.zeros(len(feature_names))
         except Exception:
-            # Fallback heuristic feature weights
             vals = np.random.uniform(-0.15, 0.35, size=len(feature_names))
 
         contributions = []
         raw_dict = X_sample.iloc[0].to_dict()
-        
-        # Pair raw clinical features with display information
+
         for k, v in raw_dict.items():
             disp_name = FEATURE_DISPLAY_NAMES.get(k, k.replace("_", " ").title())
-            # Find approximate shap contribution
             match_val = 0.0
             for idx, fn in enumerate(feature_names):
                 if k in str(fn):
@@ -89,7 +89,6 @@ class ExplainabilityEngine:
                 "clinical_note": clinical_note
             })
 
-        # Sort by absolute impact
         contributions.sort(key=lambda x: abs(x["shap_value"]), reverse=True)
         return contributions
 
