@@ -1,88 +1,110 @@
-import pandas as pd
 import numpy as np
+import pandas as pd
 from typing import Dict, Any, List
-
-from app.schemas.assessment import HealthDataInput, SHAPFeatureContribution
-from app.models.enums import RiskCategory
+from app.schemas.assessment import HealthDataInput
 from ml_engine.training.registry import ModelRegistryService
 from ml_engine.evaluation.explainability import ExplainabilityEngine
+from ml_engine.evaluation.uncertainty_engine import BayesianUncertaintyEngine
+from app.services.anomaly_detection_service import BiomarkerAnomalyDetectionService
+from app.core.cache import MultiTierInferenceCache
+from app.core.logging import logger
 
 class MLInferenceService:
-    @staticmethod
-    def run_risk_assessment(biomarkers: HealthDataInput) -> Dict[str, Any]:
-        """
-        Execute full inference pipeline: Ensemble + Base models + SHAP explainability.
-        """
+    """
+    High-throughput ML Inference Service with Multi-Tier Caching,
+    Bayesian Uncertainty Estimation, and Biochemical Plausibility Checks.
+    """
+
+    @classmethod
+    def run_risk_assessment(cls, biomarkers: HealthDataInput) -> Dict[str, Any]:
+        raw_dict = biomarkers.model_dump()
+        cache = MultiTierInferenceCache()
+        cache_key = f"infer:{cache.generate_biomarker_hash(raw_dict)}"
+
+        # Check Cache
+        cached_result = cache.get(cache_key)
+        if cached_result:
+            logger.info("Inference cache HIT (sub-5ms response).")
+            cached_result["from_cache"] = True
+            return cached_result
+
+        # 1. Physiological Coherence Check
+        coherence_report = BiomarkerAnomalyDetectionService.analyze_physiological_coherence(biomarkers)
+
+        # 2. Prepare DataFrame
+        df_sample = pd.DataFrame([raw_dict])
+        df_sample = df_sample.rename(columns={
+            "smoking_status": "smoking_status",
+            "alcohol_consumption": "alcohol_consumption"
+        })
+        if hasattr(biomarkers.smoking_status, "value"):
+            df_sample["smoking_status"] = biomarkers.smoking_status.value
+        if hasattr(biomarkers.alcohol_consumption, "value"):
+            df_sample["alcohol_consumption"] = biomarkers.alcohol_consumption.value
+
+        df_sample["family_history_cad"] = float(df_sample["family_history_cad"].iloc[0])
+        df_sample["family_history_diabetes"] = float(df_sample["family_history_diabetes"].iloc[0])
+        df_sample["family_history_hypertension"] = float(df_sample["family_history_hypertension"].iloc[0])
+
+        # 3. Model Registry & Multi-Model Inference
         registry = ModelRegistryService.get_instance()
-        ensemble = registry.get_ensemble()
+        ensemble_model = registry.get_ensemble()
 
-        # Build single row DataFrame
-        input_dict = {
-            "age": biomarkers.age,
-            "systolic_bp": biomarkers.systolic_bp,
-            "diastolic_bp": biomarkers.diastolic_bp,
-            "resting_heart_rate": biomarkers.resting_heart_rate,
-            "total_cholesterol": biomarkers.total_cholesterol,
-            "hdl_cholesterol": biomarkers.hdl_cholesterol,
-            "ldl_cholesterol": biomarkers.ldl_cholesterol,
-            "triglycerides": biomarkers.triglycerides,
-            "bmi": biomarkers.bmi,
-            "fasting_glucose": biomarkers.fasting_glucose,
-            "hba1c": biomarkers.hba1c,
-            "smoking_status": biomarkers.smoking_status.value,
-            "alcohol_consumption": biomarkers.alcohol_consumption.value,
-            "physical_activity_hours_week": biomarkers.physical_activity_hours_week,
-            "family_history_cad": float(biomarkers.family_history_cad),
-            "family_history_diabetes": float(biomarkers.family_history_diabetes),
-            "family_history_hypertension": float(biomarkers.family_history_hypertension),
-        }
-        df_sample = pd.DataFrame([input_dict])
+        breakdown = ensemble_model.predict_detailed_breakdown(df_sample)
 
-        # Run Ensemble Breakdown
-        breakdown = ensemble.predict_detailed_breakdown(df_sample)
-        overall_score = float(breakdown["overall_risk_score"])
-        category_str = breakdown["overall_risk_category"]
-        risk_category = RiskCategory(category_str)
-
-        # Run SHAP Explainability on best tree model (XGBoost or RF)
-        explainer_model = registry.get_model("XGBoost") or registry.get_model("RandomForest") or registry.get_model("LogisticRegression")
+        # 4. SHAP Feature Attribution
+        explainer_model = ensemble_model.models.get("XGBoost") or list(ensemble_model.models.values())[0]
         shap_contributions = ExplainabilityEngine.explain_patient_risk(explainer_model, df_sample)
 
-        # Generate Clinical Actionable Recommendations
-        recommendations = MLInferenceService._generate_recommendations(biomarkers, risk_category, shap_contributions)
+        # 5. Bayesian Uncertainty Quantification
+        ensemble_scores = {
+            m_name: float(m_info.get("predicted_risk_score", breakdown["overall_risk_score"]))
+            for m_name, m_info in breakdown.get("models", {}).items()
+        }
+        uncertainty_profile = BayesianUncertaintyEngine.calculate_uncertainty_profile(
+            biomarker_dict=raw_dict,
+            ensemble_model_scores=ensemble_scores,
+            overall_risk_score=breakdown["overall_risk_score"]
+        )
 
-        return {
-            "overall_risk_score": overall_score,
-            "risk_category": risk_category,
-            "primary_model_name": "Calibrated Ensemble (LR + RF + XGBoost)",
-            "ensemble_predictions": breakdown["models"],
+        # 6. Actionable Clinical Recommendations
+        recommendations = cls._generate_clinical_recommendations(breakdown["overall_risk_category"], biomarkers)
+
+        result_payload = {
+            "overall_risk_score": breakdown["overall_risk_score"],
+            "risk_category": breakdown["overall_risk_category"],
+            "primary_model_name": "Calibrated Multi-Model Ensemble (LR + RF + XGBoost)",
+            "ensemble_predictions": breakdown.get("models", {}),
             "feature_importance_shap": shap_contributions,
             "clinical_recommendations": recommendations,
-            "input_biomarkers": biomarkers
+            "uncertainty_profile": uncertainty_profile,
+            "physiological_coherence": coherence_report,
+            "from_cache": False
         }
 
+        # Store in cache
+        cache.set(cache_key, result_payload, ttl_seconds=3600)
+        return result_payload
+
     @staticmethod
-    def _generate_recommendations(data: HealthDataInput, category: RiskCategory, shap_list: List[Dict[str, Any]]) -> List[str]:
+    def _generate_clinical_recommendations(category: Any, data: HealthDataInput) -> List[str]:
         recs = []
-        if category in [RiskCategory.HIGH, RiskCategory.CRITICAL]:
-            recs.append("Schedule a comprehensive clinical consultation with a cardiologist / internist.")
-        
-        if data.systolic_bp >= 140 or data.diastolic_bp >= 90:
-            recs.append("Daily blood pressure monitoring recommended. Limit dietary sodium intake (< 2,000 mg/day).")
-        
-        if data.fasting_glucose >= 100 or data.hba1c >= 5.7:
-            recs.append("Metabolic glycemic screening advised; adopt a low-glycemic Mediterranean or DASH dietary pattern.")
-        
-        if data.smoking_status.value == "CURRENT":
-            recs.append("Smoking cessation therapy strongly advised to reduce acute vascular inflammation.")
-        
-        if data.bmi >= 25.0:
-            recs.append(f"Structured aerobic exercise target: at least 150 minutes/week with caloric balance optimization.")
-        
-        if data.ldl_cholesterol >= 130.0:
-            recs.append("Evaluate lipid panel with primary care physician for potential statin or lifestyle lipid therapy.")
+        cat_str = str(category.value) if hasattr(category, "value") else str(category)
 
-        if not recs:
-            recs.append("Maintain routine physical exercise, balanced nutrition, and annual preventive health screening.")
+        if cat_str in ["HIGH", "CRITICAL"]:
+            recs.append("Urgent comprehensive cardiovascular consultation and 12-lead ECG.")
+            recs.append("Evaluate initiation of moderate-to-high intensity statin therapy.")
+            recs.append("Strict home blood pressure surveillance targeting < 130/80 mmHg.")
+        elif cat_str == "MODERATE":
+            recs.append("Implement therapeutic lifestyle changes: Mediterranean diet & 150 min/wk aerobic exercise.")
+            recs.append("Repeat fasting lipid panel and glycemic screening in 3-6 months.")
+            recs.append("Consider Coronary Artery Calcium (CAC) scan for risk reclassification.")
+        else:
+            recs.append("Maintain optimal cardiovascular health baseline habits.")
+            recs.append("Routine preventive biomarker re-evaluation in 12 months.")
 
+        if data.smoking_status in ["CURRENT", "FORMER"]:
+            recs.append("Active tobacco cessation counseling and nicotine replacement support.")
+        if data.fasting_glucose >= 126 or data.hba1c >= 6.5:
+            recs.append("Endocrine referral for individualized glycemic management.")
         return recs
