@@ -40,6 +40,7 @@
     "recharts": "^2.12.3",
     "tailwind-merge": "^2.2.2",
     "tailwindcss-animate": "^1.0.7",
+    "vortex-quest": "file:../../git_game",
     "zod": "^3.22.4",
     "zustand": "^4.5.2"
   },

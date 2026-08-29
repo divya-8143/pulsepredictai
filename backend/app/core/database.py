@@ -1,17 +1,19 @@
 from typing import AsyncGenerator
+import os
 from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
 from sqlalchemy.orm import declarative_base
-from sqlalchemy import create_engine
 from app.core.config import settings
 
-# Async Engine for FastAPI async requests
+# Determine database URL (PostgreSQL or SQLite async fallback)
+db_url = settings.DATABASE_URL
+if "sqlite" in db_url or not os.environ.get("POSTGRES_SERVER"):
+    local_db_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "pulsepredict_local.db")
+    db_url = f"sqlite+aiosqlite:///{local_db_path}"
+
 async_engine = create_async_engine(
-    settings.DATABASE_URL,
-    echo=settings.DEBUG,
-    future=True,
-    pool_size=20,
-    max_overflow=10,
-    pool_pre_ping=True
+    db_url,
+    echo=False,
+    future=True
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -22,7 +24,6 @@ AsyncSessionLocal = async_sessionmaker(
     class_=AsyncSession
 )
 
-# Declarative Base for models
 Base = declarative_base()
 
 async def get_db() -> AsyncGenerator[AsyncSession, None]:

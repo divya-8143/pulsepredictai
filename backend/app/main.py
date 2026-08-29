@@ -2,37 +2,56 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import time
+from contextlib import asynccontextmanager
+
 from app.core.config import settings
 from app.core.logging import logger
 from app.core.exceptions import AppException
+from app.core.database import async_engine, Base, AsyncSessionLocal
 from app.api.v1.router import api_router
+from ml_engine.training.registry import ModelRegistryService
+import app.models  # ensure all models registered
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Initializing database schemas...")
+    async with async_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    
+    logger.info("Initializing Machine Learning Registry...")
+    ModelRegistryService.get_instance()
+
+    from scripts.seed_db import seed_database
+    try:
+        await seed_database()
+    except Exception as e:
+        logger.warning(f"Auto-seed notification: {e}")
+        
+    yield
+    logger.info("Shutting down PulsePredict AI API service.")
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
     description="""
     Enterprise AI/ML Health Risk Assessment & Decision Support Platform.
-    
     * Multi-model risk prediction (Logistic Regression, Random Forest, XGBoost)
     * Role-Based Access Control (Patient, Doctor, Admin)
     * Longitudinal biomarker tracking, SHAP explainability & clinical PDF reporting.
-    
-    **Disclaimer**: Designed for clinical risk assessment and monitoring. Does NOT provide definitive medical diagnoses.
     """,
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan
 )
 
-# CORS Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.ALLOWED_ORIGINS,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Request Timing & Diagnostic Middleware
 @app.middleware("http")
 async def add_process_time_header(request: Request, call_next):
     start_time = time.time()
@@ -41,7 +60,6 @@ async def add_process_time_header(request: Request, call_next):
     response.headers["X-Process-Time-Ms"] = f"{process_time:.2f}"
     return response
 
-# Global Exception Handler
 @app.exception_handler(AppException)
 async def app_exception_handler(request: Request, exc: AppException):
     logger.error(f"Application exception: {exc.detail} | Code: {exc.error_code}")
@@ -57,7 +75,6 @@ async def app_exception_handler(request: Request, exc: AppException):
 
 @app.get("/health", tags=["System Health"])
 async def health_check():
-    """System health & readiness probe."""
     return {
         "status": "healthy",
         "app": settings.PROJECT_NAME,
@@ -65,5 +82,4 @@ async def health_check():
         "disclaimer": "For clinical risk assessment & monitoring only. Not a medical diagnosis."
     }
 
-# Mount v1 REST APIs
 app.include_router(api_router, prefix=settings.API_V1_STR)
